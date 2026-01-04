@@ -1,0 +1,52 @@
+name: MS Jobs Monitor
+
+on:
+  schedule:
+    - cron: "*/30 * * * *" # every 30 minutes
+  workflow_dispatch:
+
+jobs:
+  run-monitor:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Microsoft Job Tracker
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Restore DB artifact (if any)
+        uses: actions/download-artifact@v4
+        with:
+          name: ms_jobs_state
+          path: Microsoft Job Tracker
+        continue-on-error: true
+
+      - name: Install deps
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install requests beautifulsoup4 playwright
+          .venv/bin/python -m playwright install chromium
+
+      - name: Run monitor
+        env:
+          MS_KEYWORD: ${{ secrets.MS_KEYWORD }}
+          MS_LOCATION: ${{ secrets.MS_LOCATION }}
+          MS_SEARCH_URL: ${{ secrets.MS_SEARCH_URL }} # optional: set to override search
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: .venv/bin/python microsft_live_Tracker.py
+
+      - name: Upload DB artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ms_jobs_state
+          path: Microsoft Job Tracker/ms_jobs_state.sqlite
+          if-no-files-found: ignore
+          retention-days: 30
