@@ -20,7 +20,7 @@ POLL_MAX_SECONDS = int(os.getenv("MS_POLL_MAX_SECONDS", "180"))
 COOLDOWN_SECONDS = int(os.getenv("MS_COOLDOWN_SECONDS", str(10 * 60)))  # don't email more than once per 10 minutes
 DB_PATH = os.getenv("MS_DB_PATH", "ms_jobs_state.sqlite")
 
-SEARCH_BASE = os.getenv("MS_SEARCH_BASE", "https://jobs.careers.microsoft.com/global/en/search")
+SEARCH_BASE = os.getenv("MS_SEARCH_BASE", "https://apply.careers.microsoft.com/careers")
 CUSTOM_SEARCH_URL = os.getenv("MS_SEARCH_URL")  # allow overriding with a full URL like the apply.careers.microsoft.com query
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (MSJobsMonitor/2.0; +https://example.com)",
@@ -132,8 +132,8 @@ def build_search_url() -> str:
         return CUSTOM_SEARCH_URL
     q = quote_plus(KEYWORD)
     loc_q = quote_plus(LOCATION)
-    # The site sorts client-side, so we request most recent and let DOM order be our recency signal.
-    return f"{SEARCH_BASE}?keywords={q}&location={loc_q}&sortBy=DT_DESC"
+    # Apply site query: most recent first, include remote, start at page 0
+    return f"{SEARCH_BASE}?query={q}&start=0&location={loc_q}&sort_by=timestamp&filter_include_remote=1"
 
 def render_search_page(url: str) -> str:
     """Render the jobs page (JS required) and return the HTML."""
@@ -162,39 +162,73 @@ def parse_jobs_from_html(html: str) -> List[Dict[str, Any]]:
     jobs: List[Dict[str, Any]] = []
     seen_ids = set()
 
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        if "/job/" not in href:
+    def has_class_prefix(tag, prefix: str) -> bool:
+        return any(c.startswith(prefix) for c in tag.get("class", []))
+
+    # New apply.careers layout: cards under data-test-id="job-listing"
+    for card in soup.find_all(attrs={"data-test-id": "job-listing"}):
+        a = card.find("a", href=True)
+        if not a or "/job/" not in a["href"]:
             continue
-        jobid_match = re.search(r"/job/([0-9]+)/", href)
+
+        href = a["href"]
+        jobid_match = re.search(r"/job/([0-9]+)", href)
         jid = jobid_match.group(1) if jobid_match else href
         if jid in seen_ids:
             continue
 
-        title_text = a.get_text(" ", strip=True) or "Untitled"
-        card = a.find_parent(["article", "li", "div"])
-        location_text = None
-        posted_text = None
+        title_el = card.find(lambda t: t.name in ("div", "h3", "h4") and has_class_prefix(t, "title-"))
+        loc_el = card.find(lambda t: t.name in ("div", "span") and has_class_prefix(t, "fieldValue-"))
+        date_el = card.find(lambda t: t.name in ("div", "span") and has_class_prefix(t, "subData-"))
 
-        if card:
-            # look for common location / date markers inside the card
-            loc_el = card.find(lambda tag: tag.name in ("span", "div") and "location" in " ".join(tag.get("class", [])).lower())
-            if loc_el and loc_el.get_text(strip=True):
-                location_text = loc_el.get_text(" ", strip=True)
+        title_text = title_el.get_text(" ", strip=True) if title_el else (a.get_text(" ", strip=True) or "Untitled")
+        location_text = loc_el.get_text(" ", strip=True) if loc_el else "N/A"
+        posted_text = date_el.get_text(" ", strip=True) if date_el else None
 
-            date_el = card.find(lambda tag: tag.name in ("span", "div") and ("posted" in " ".join(tag.get("class", [])).lower() or "date" in " ".join(tag.get("class", [])).lower()))
-            if date_el and date_el.get_text(strip=True):
-                posted_text = date_el.get_text(" ", strip=True)
-
-        job_url = urljoin("https://jobs.careers.microsoft.com", href)
+        job_url = urljoin("https://apply.careers.microsoft.com", href)
         jobs.append({
             "id": jid,
             "title": title_text,
-            "location": location_text or "N/A",
+            "location": location_text,
             "posted_text": posted_text,
             "url": job_url,
         })
         seen_ids.add(jid)
+
+    # Fallback: older layout
+    if not jobs:
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if "/job/" not in href:
+                continue
+            jobid_match = re.search(r"/job/([0-9]+)/", href)
+            jid = jobid_match.group(1) if jobid_match else href
+            if jid in seen_ids:
+                continue
+
+            title_text = a.get_text(" ", strip=True) or "Untitled"
+            card = a.find_parent(["article", "li", "div"])
+            location_text = None
+            posted_text = None
+
+            if card:
+                loc_el = card.find(lambda tag: tag.name in ("span", "div") and "location" in " ".join(tag.get("class", [])).lower())
+                if loc_el and loc_el.get_text(strip=True):
+                    location_text = loc_el.get_text(" ", strip=True)
+
+                date_el = card.find(lambda tag: tag.name in ("span", "div") and ("posted" in " ".join(tag.get("class", [])).lower() or "date" in " ".join(tag.get("class", [])).lower()))
+                if date_el and date_el.get_text(strip=True):
+                    posted_text = date_el.get_text(" ", strip=True)
+
+            job_url = urljoin("https://jobs.careers.microsoft.com", href)
+            jobs.append({
+                "id": jid,
+                "title": title_text,
+                "location": location_text or "N/A",
+                "posted_text": posted_text,
+                "url": job_url,
+            })
+            seen_ids.add(jid)
 
     return jobs
 
