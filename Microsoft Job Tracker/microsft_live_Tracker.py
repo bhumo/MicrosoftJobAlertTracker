@@ -342,7 +342,7 @@ def main():
     conn = db_conn()
     print("MS Jobs monitor running… (Ctrl+C to stop)")
     i=0
-    while i<2:
+    while True:
         try:
             log_public_ip(conn)
             jobs = fetch_jobs()
