@@ -2,7 +2,7 @@ name: MS Jobs Monitor
 
 on:
   schedule:
-    - cron: "*/30 * * * *" # every 30 minutes
+    - cron: "*/400 * * * *" # every 400 minutes
   workflow_dispatch:
 
 jobs:
